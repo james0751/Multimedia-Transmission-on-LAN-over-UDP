@@ -23,7 +23,7 @@ class MultiChatServer(threading.Thread):
         while True:
             data, addr = self.connect.recvfrom(204800)
             isflag, adatalen, datalen = struct.unpack('3sII', data[:12])
-            print(datalen)
+            print("接收音视频总数据长度: " + str(datalen))
             adatalenstruct = struct.pack("I",adatalen)
             try:
                 flag = isflag.decode('utf-8')
@@ -36,13 +36,19 @@ class MultiChatServer(threading.Thread):
                 if len(self.databuf) != datalen:
                     if self.datalenbuf == 0 or self.datalenbuf == datalen:
                         self.datalenbuf = datalen
+                        print('同一UDP数据包重组')
+                        print('同一UDP数据包分片长度: ' + str(len(self.databuf)))
                         continue
                     else:
                         self.databuf = b''
                         self.databuf += tempbuf
                         self.datalenbuf = datalen
+                        print('新的UDP数据包')
+                        print('新的UDP数据包长度: ' + str(len(self.databuf)))
                         continue
                 data = self.databuf
+                print('数据包重组完成')
+                print('UDP数据包重组后长度: ' + str(len(data)))
                 self.databuf = b''
                 datatemp = adatalenstruct + data
                 self.dataque.put(datatemp)
@@ -68,11 +74,11 @@ class AudioVideoOutput(threading.Thread):
         while True:
             datatemp = self.dataque.get()
             adatalen = struct.unpack("I",datatemp[:4])[0]
-            print (adatalen)
+            print ("音频数据包长度: "+ str(adatalen))
             data = datatemp[4:]
             adata = data[:adatalen]
             vdata = data[adatalen:]
-
+            print ('视频数据包长度: '+str(len(vdata)))
             numpydata = pickle.loads(vdata)
             image = cv2.imdecode(numpydata, 1)
             cv2.imshow('server', image)
