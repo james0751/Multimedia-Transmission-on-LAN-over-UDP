@@ -23,15 +23,21 @@ class MultiChatClient(threading.Thread):
         while True:
             audiodata = self.audiodataque.get()
             while self.audiodataque.empty() is not True:
-                audiodata += self.audiodataque.get()
+                audiodata.extend(self.audiodataque.get())    #audiodata是列表
             videodata = self.videodataque.get()
             while self.videodataque.empty() is not True:
-                videodata += self.videodataque.get()
+                numpy.append(videodata,self.videodataque.get())  #videodata是numpy.array数组
+            audiodata = pickle.dumps(audiodata)
+            videodata = pickle.dumps(videodata)
             numpydata = pickle.loads(videodata)
             image = cv2.imdecode(numpydata, 1)
             cv2.imshow('client', image)
             if cv2.waitKey(1) & 0xFF == 27:
                 cv2.destroyWindow('client')
+                break
+
+
+
             totaldata = audiodata + videodata
             totaldatalen = len(totaldata)
             audiodatalen = len(audiodata)
@@ -52,24 +58,27 @@ class MultiChatClient(threading.Thread):
                 self.connect.sendto(struct.pack('3sII', flag, audiodatalen, totaldatalen) + totaldata, self.address)
 
 class VideoClient(threading.Thread):
+
     def __init__(self,videodataque):
         threading.Thread.__init__(self)
         self.resolution = (800, 600)
-        self.img_quality = 80
+        self.img_quality = 60
         self.encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), self.img_quality]
         self.videodataque = videodataque
         self.camera = cv2.VideoCapture(0)
+
     def run(self):
         self.collectordata()
+
     def collectordata(self):
         while True:
             time.sleep(0)  # 视频每秒采样次数
             (ret, frame) = self.camera.read()
             frame = cv2.resize(frame, self.resolution)
             result, imgencode = cv2.imencode('.jpg', frame, self.encode_param)
-            imgdata = pickle.dumps(imgencode)
+            #imgdata = pickle.dumps(imgencode)
             #return imgdata
-            self.videodataque.put(imgdata)
+            self.videodataque.put(imgencode)
             print('视频数据进入队列')
 
 class AudioClient(threading.Thread):
@@ -79,12 +88,13 @@ class AudioClient(threading.Thread):
         self.FORMAT = pyaudio.paInt16
         self.CHANNELS = 2
         self.RATE = 44100
-        self.RECORD_SECONDS = 0.3
+        self.RECORD_SECONDS = 0.15
         self.audio =pyaudio.PyAudio()
         self.stream = None
         self.stream = self.audio.open(format=self.FORMAT, channels=self.CHANNELS, rate=self.RATE, input=True,
                                       frames_per_buffer=self.CHUNK)
         self.audiodataque = audiodataque
+
     def run(self):
         while True:
             self.collectordata()
@@ -94,15 +104,15 @@ class AudioClient(threading.Thread):
         for i in range(0, int(self.RATE / self.CHUNK * self.RECORD_SECONDS)):
             data = self.stream.read(self.CHUNK)
             frames.append(data)
-        audiodata = pickle.dumps(frames)
+        #audiodata = pickle.dumps(frames)
         #return audiodata
-        self.audiodataque.put(audiodata)
+        self.audiodataque.put(frames)
         print('语音数据进入队列')
+        print ('一次音频数据长度: '+ str(len(frames)))
 
 def main():
     videodataque = queue.Queue()
     audiodataque = queue.Queue()
-
     address = ('127.0.0.1', 31500)
     audioclient = AudioClient(audiodataque)
     videoclient = VideoClient(videodataque)
@@ -110,7 +120,6 @@ def main():
     videoclient.start()
     chatclient = MultiChatClient(address, audiodataque,videodataque)
     chatclient.start()
-
 
 if __name__ == "__main__":
     main()
