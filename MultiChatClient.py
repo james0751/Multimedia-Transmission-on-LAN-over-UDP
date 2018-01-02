@@ -6,9 +6,7 @@ import time
 import pickle
 import pyaudio
 import queue
-import time
 import os
-import numpy
 
 class MultiChatClient(threading.Thread):
 
@@ -20,51 +18,35 @@ class MultiChatClient(threading.Thread):
         self.videodataque = videodataque
 
     def run(self):
+        print('client on ...')
         while True:
-            audiodata = self.audiodataque.get()
-            while self.audiodataque.empty() is not True:
-                audiodata.extend(self.audiodataque.get())    #audiodata是列表
             videodata = self.videodataque.get()
-            while self.videodataque.empty() is not True:
-                numpy.append(videodata,self.videodataque.get())  #videodata是numpy.array数组
-            audiodata = pickle.dumps(audiodata)
-            videodata = pickle.dumps(videodata)
-            numpydata = pickle.loads(videodata)
-            image = cv2.imdecode(numpydata, 1)
-            cv2.imshow('client', image)
-            if cv2.waitKey(1) & 0xFF == 27:
-                cv2.destroyWindow('client')
-                break
-
-
-
+            audiodata = self.audiodataque.get()
             totaldata = audiodata + videodata
             totaldatalen = len(totaldata)
             audiodatalen = len(audiodata)
-            print ('发送一次UDP数据包')
-            print ('音频数据长度: '+str(audiodatalen))
-            print ("视频数据长度: "+str(len(videodata)))
-            print ("音视频总数据长度: " +str(totaldatalen))
             if totaldatalen > 60000:
                 flag = "BOF".encode('utf-8')
                 for i in range(0, totaldatalen, 60000):
                     j = i + 60000
                     totaldataslicing = totaldata[i:j]
                     self.connect.sendto(struct.pack('3sII', flag, audiodatalen, totaldatalen) + totaldataslicing,
-                                    self.address)
-                    print ('发送数据包分片长度: '+ str(len(totaldataslicing)))
+                                            self.address)
             else:
-                flag ='NOF'.encode('utf-8')
+                flag = 'NOF'.encode('utf-8')
                 self.connect.sendto(struct.pack('3sII', flag, audiodatalen, totaldatalen) + totaldata, self.address)
 
-class VideoClient(threading.Thread):
 
-    def __init__(self,videodataque):
+class VideoCollector(threading.Thread):
+
+    def __init__(self,imgquality,resolution,videoframerate,videodataque,judgeque):
         threading.Thread.__init__(self)
-        self.resolution = (800, 600)
-        self.img_quality = 60
+        self.resolution = resolution
+        self.img_quality = imgquality
+        self.videoframerate = videoframerate
         self.encode_param = [int(cv2.IMWRITE_JPEG_QUALITY), self.img_quality]
         self.videodataque = videodataque
+        self.judgeque = judgeque
         self.camera = cv2.VideoCapture(0)
 
     def run(self):
@@ -72,27 +54,36 @@ class VideoClient(threading.Thread):
 
     def collectordata(self):
         while True:
-            time.sleep(0)  # 视频每秒采样次数
-            (ret, frame) = self.camera.read()
-            frame = cv2.resize(frame, self.resolution)
-            result, imgencode = cv2.imencode('.jpg', frame, self.encode_param)
-            #imgdata = pickle.dumps(imgencode)
-            #return imgdata
-            self.videodataque.put(imgencode)
-            print('视频数据进入队列')
+            videoframes = []
+            starttime = time.time()
+            timespace = starttime + 0.2 
+            while True:
+                time.sleep(self.videoframerate) 
+                (ret, frame) = self.camera.read()
+                frame = cv2.resize(frame, self.resolution)
+                result, imgencode = cv2.imencode('.jpg', frame, self.encode_param)
+                videoframes.append(imgencode)
+                endtime = time.time()
+                if endtime >= timespace:
+                    runtime = endtime - starttime
+                    videodatapacket = pickle.dumps(videoframes)
+                    self.videodataque.put(struct.pack('f',runtime) + videodatapacket)
+                    self.judgeque.put(True)
+                    break
 
-class AudioClient(threading.Thread):
-    def __init__(self,audiodataque):
+class AudioCollector(threading.Thread):
+    def __init__(self,audiodataque,judgeque):
         threading.Thread.__init__(self)
         self.CHUNK = 1024
         self.FORMAT = pyaudio.paInt16
         self.CHANNELS = 2
         self.RATE = 44100
-        self.RECORD_SECONDS = 0.15
+        self.RECORD_SECONDS = 2 
         self.audio =pyaudio.PyAudio()
         self.stream = None
         self.stream = self.audio.open(format=self.FORMAT, channels=self.CHANNELS, rate=self.RATE, input=True,
                                       frames_per_buffer=self.CHUNK)
+        self.judgeque = judgeque
         self.audiodataque = audiodataque
 
     def run(self):
@@ -104,21 +95,29 @@ class AudioClient(threading.Thread):
         for i in range(0, int(self.RATE / self.CHUNK * self.RECORD_SECONDS)):
             data = self.stream.read(self.CHUNK)
             frames.append(data)
-        #audiodata = pickle.dumps(frames)
-        #return audiodata
-        self.audiodataque.put(frames)
-        print('语音数据进入队列')
-        print ('一次音频数据长度: '+ str(len(frames)))
+            try:
+                flag = self.judgeque.get(block=False)
+            except:
+                flag = False
+                pass
+            if flag == True:
+                break
+        audiodatapacket = pickle.dumps(frames)
+        self.audiodataque.put(audiodatapacket)
 
 def main():
-    videodataque = queue.Queue()
-    audiodataque = queue.Queue()
-    address = ('127.0.0.1', 31500)
-    audioclient = AudioClient(audiodataque)
-    videoclient = VideoClient(videodataque)
-    audioclient.start()
-    videoclient.start()
+    address = ('127.0.0.1', 52100)
+    imgquality = 50
+    resolution = (640,480)
+    videoframerate = 0.04
+    judgeque = queue.Queue(maxsize=1)
+    audiodataque = queue.Queue(maxsize=1)
+    videodataque = queue.Queue(maxsize=1)
+    audiocollector = AudioCollector(audiodataque,judgeque)
+    videocollector = VideoCollector(imgquality,resolution,videoframerate,videodataque,judgeque)
     chatclient = MultiChatClient(address, audiodataque,videodataque)
+    audiocollector.start()
+    videocollector.start()
     chatclient.start()
 
 if __name__ == "__main__":
